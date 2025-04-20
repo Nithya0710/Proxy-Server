@@ -1,103 +1,142 @@
+# proxy_server_gui.py
+
 import socket
 import threading
 import select
 import hashlib
 import time
+import signal
+import sys
+import logging
+from concurrent.futures import ThreadPoolExecutor
+import tkinter as tk
+from tkinter.scrolledtext import ScrolledText
 
-# Proxy Server Configuration
-HOST = '0.0.0.0'  # Listen on all interfaces
-PORT = 8888       # Port for the proxy server
+# Configuration
+HOST = '0.0.0.0'
+PORT = 8888
 BUFFER_SIZE = 4096
-CACHE = {}  # Dictionary to store cached responses
-CACHE_EXPIRY = 60  # Cache expiration time in seconds
+CACHE = {}
+CACHE_EXPIRY = 60
+MAX_WORKERS = 50
+
+# Logging to GUI
+class GuiLogger:
+    def __init__(self, text_widget):
+        self.text_widget = text_widget
+
+    def write(self, message):
+        self.text_widget.after(0, self.text_widget.insert, tk.END, message)
+        self.text_widget.after(0, self.text_widget.see, tk.END)
+
+    def flush(self):
+        pass
+
+# Graceful shutdown support
+is_running = True
+
+def shutdown_handler(signum, frame):
+    global is_running
+    print("Shutting down proxy server...")
+    is_running = False
+
+signal.signal(signal.SIGINT, shutdown_handler)
+signal.signal(signal.SIGTERM, shutdown_handler)
 
 def get_cache_key(url):
-    """Generates a cache key using a hash of the URL."""
     return hashlib.md5(url.encode()).hexdigest()
 
-def handle_client(client_socket):
-    """Handles client request, forwards to target server, and relays the response."""
+def parse_request(request):
     try:
-        request = client_socket.recv(BUFFER_SIZE).decode()
+        lines = request.split('\r\n')
+        method, url, version = lines[0].split(' ')
+        return method, url, version
+    except ValueError:
+        return None, None, None
+
+def handle_client(client_socket):
+    try:
+        request = b''
+        while True:
+            chunk = client_socket.recv(BUFFER_SIZE)
+            request += chunk
+            if b'\r\n\r\n' in request or not chunk:
+                break
+
         if not request:
             return
-        
-        first_line = request.split('\n')[0]
-        method, url, _ = first_line.split(' ')
-        
+
+        request_str = request.decode('utf-8', errors='ignore')
+        method, url, version = parse_request(request_str)
+
+        if method is None:
+            print("Malformed request received.")
+            return
+
         if method == "CONNECT":
             handle_https_tunnel(client_socket, url)
         else:
             handle_http_request(client_socket, request, url)
+
     except Exception as e:
         print(f"Error handling client: {e}")
     finally:
         client_socket.close()
 
 def handle_http_request(client_socket, request, url):
-    """Handles standard HTTP requests by forwarding and relaying responses."""
     try:
         cache_key = get_cache_key(url)
         current_time = time.time()
-        
-        # Check cache for a valid response
+
         if cache_key in CACHE and (current_time - CACHE[cache_key]['timestamp'] < CACHE_EXPIRY):
             print(f"Cache hit for {url}")
             client_socket.sendall(CACHE[cache_key]['response'])
             return
-        
+
         http_pos = url.find('://')
         if http_pos != -1:
             url = url[(http_pos+3):]
-        
+
         port_pos = url.find(':')
         path_pos = url.find('/')
         if path_pos == -1:
             path_pos = len(url)
-        
-        if port_pos == -1 or port_pos > path_pos:
-            port = 80
-            host = url[:path_pos]
-        else:
-            port = int(url[(port_pos+1):path_pos])
-            host = url[:port_pos]
-        
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.connect((host, port))
-        server_socket.sendall(request.encode())
-        
+
+        port = 80 if port_pos == -1 or port_pos > path_pos else int(url[(port_pos+1):path_pos])
+        host = url[:port_pos] if port_pos != -1 and port_pos < path_pos else url[:path_pos]
+
+        server_socket = socket.create_connection((host, port))
+        server_socket.sendall(request)
+
         response_data = b""
         while True:
             response = server_socket.recv(BUFFER_SIZE)
-            if len(response) > 0:
-                response_data += response
-                client_socket.send(response)
-            else:
+            if not response:
                 break
-        
-        # Store response in cache
+            response_data += response
+            client_socket.sendall(response)
+
         CACHE[cache_key] = {'response': response_data, 'timestamp': time.time()}
-        
         server_socket.close()
     except Exception as e:
         print(f"HTTP Request Error: {e}")
 
 def handle_https_tunnel(client_socket, url):
-    """Handles HTTPS connections by creating a TCP tunnel."""
     try:
         host, port = url.split(':')
         port = int(port)
-        
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.connect((host, port))
+
+        server_socket = socket.create_connection((host, port))
         client_socket.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-        
+
         sockets = [client_socket, server_socket]
         while True:
-            r, _, _ = select.select(sockets, [], [])
+            r, _, _ = select.select(sockets, [], [], 10)
+            if not r:
+                break
             for sock in r:
                 data = sock.recv(BUFFER_SIZE)
-                if len(data) == 0:
+                if not data:
                     return
                 if sock is client_socket:
                     server_socket.sendall(data)
@@ -107,19 +146,53 @@ def handle_https_tunnel(client_socket, url):
         print(f"HTTPS Tunnel Error: {e}")
 
 def start_proxy():
-    """Starts the proxy server."""
     proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     proxy_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     proxy_socket.bind((HOST, PORT))
-    proxy_socket.listen(5)
+    proxy_socket.listen(100)
+    proxy_socket.settimeout(1.0)
+
     print(f"Proxy Server listening on {HOST}:{PORT}")
-    
-    while True:
-        client_socket, addr = proxy_socket.accept()
-        print(f"Accepted connection from {addr}")
-        
-        client_handler = threading.Thread(target=handle_client, args=(client_socket,))
-        client_handler.start()
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        while is_running:
+            try:
+                client_socket, addr = proxy_socket.accept()
+                print(f"Accepted connection from {addr}")
+                executor.submit(handle_client, client_socket)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"Accept error: {e}")
+                break
+
+    proxy_socket.close()
+
+def launch_gui():
+    def clear_log():
+        text_area.delete('1.0', tk.END)
+
+    def exit_gui():
+        global is_running
+        is_running = False
+        root.destroy()
+
+    root = tk.Tk()
+    root.title("Proxy Server Control Panel")
+
+    control_frame = tk.Frame(root)
+    tk.Button(control_frame, text="Clear Log", command=clear_log).pack(side=tk.LEFT, padx=5)
+    tk.Button(control_frame, text="Exit", command=exit_gui).pack(side=tk.LEFT, padx=5)
+    control_frame.pack(pady=5)
+
+    text_area = ScrolledText(root, wrap=tk.WORD, height=30, width=100)
+    text_area.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+    sys.stdout = GuiLogger(text_area)
+    sys.stderr = GuiLogger(text_area)
+
+    threading.Thread(target=start_proxy, daemon=True).start()
+    root.mainloop()
 
 if __name__ == "__main__":
-    start_proxy()
+    launch_gui()
