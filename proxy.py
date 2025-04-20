@@ -35,6 +35,11 @@ class GuiLogger:
 # Graceful shutdown support
 is_running = True
 
+# Track cached URLs
+cached_urls = []
+
+cache_listbox = None
+
 def shutdown_handler(signum, frame):
     global is_running
     print("Shutting down proxy server...")
@@ -53,6 +58,11 @@ def parse_request(request):
         return method, url, version
     except ValueError:
         return None, None, None
+
+def record_url(url):
+    if url.startswith("www.") and url not in cached_urls:
+        cached_urls.append(url)
+        update_cache_listbox()
 
 def handle_client(client_socket):
     try:
@@ -117,6 +127,9 @@ def handle_http_request(client_socket, request, url):
             client_socket.sendall(response)
 
         CACHE[cache_key] = {'response': response_data, 'timestamp': time.time()}
+
+        record_url(url)
+
         server_socket.close()
     except Exception as e:
         print(f"HTTP Request Error: {e}")
@@ -128,6 +141,8 @@ def handle_https_tunnel(client_socket, url):
 
         server_socket = socket.create_connection((host, port))
         client_socket.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+
+        record_url(host)
 
         sockets = [client_socket, server_socket]
         while True:
@@ -168,6 +183,15 @@ def start_proxy():
 
     proxy_socket.close()
 
+def update_cache_listbox():
+    if cache_listbox:
+        cache_listbox.after(0, lambda: _update_cache_listbox())
+
+def _update_cache_listbox():
+    cache_listbox.delete(0, tk.END)
+    for url in cached_urls:
+        cache_listbox.insert(tk.END, url)
+
 def launch_gui():
     def clear_log():
         text_area.delete('1.0', tk.END)
@@ -177,16 +201,24 @@ def launch_gui():
         is_running = False
         root.destroy()
 
+    global cache_listbox
+
     root = tk.Tk()
     root.title("Proxy Server Control Panel")
 
     control_frame = tk.Frame(root)
     tk.Button(control_frame, text="Clear Log", command=clear_log).pack(side=tk.LEFT, padx=5)
     tk.Button(control_frame, text="Exit", command=exit_gui).pack(side=tk.LEFT, padx=5)
-    control_frame.pack(pady=5)
+    control_frame.pack(pady=5, anchor=tk.W)
 
-    text_area = ScrolledText(root, wrap=tk.WORD, height=30, width=100)
-    text_area.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+    main_frame = tk.Frame(root)
+    main_frame.pack(fill=tk.BOTH, expand=True)
+
+    text_area = ScrolledText(main_frame, wrap=tk.WORD, height=20, width=80)
+    text_area.pack(side=tk.LEFT, padx=10, pady=5, fill=tk.BOTH, expand=True)
+
+    cache_listbox = tk.Listbox(main_frame, height=20, width=40)
+    cache_listbox.pack(side=tk.RIGHT, padx=10, pady=5, fill=tk.Y)
 
     sys.stdout = GuiLogger(text_area)
     sys.stderr = GuiLogger(text_area)
