@@ -1,5 +1,3 @@
-# proxy_server_gui.py
-
 import socket
 import threading
 import select
@@ -132,7 +130,7 @@ def handle_http_request(client_socket, request, url):
 
         server_socket.close()
     except Exception as e:
-        print(f"HTTP Request Error: {e}")
+        print(f"\n\nHTTP Request Error: {e}")
 
 def handle_https_tunnel(client_socket, url):
     try:
@@ -158,7 +156,7 @@ def handle_https_tunnel(client_socket, url):
                 else:
                     client_socket.sendall(data)
     except Exception as e:
-        print(f"HTTPS Tunnel Error: {e}")
+        print(f"\n\nHTTPS Tunnel Error: {e}")
 
 def start_proxy():
     proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -173,7 +171,7 @@ def start_proxy():
         while is_running:
             try:
                 client_socket, addr = proxy_socket.accept()
-                print(f"Accepted connection from {addr}")
+                print(f"\nAccepted connection from {addr}")
                 executor.submit(handle_client, client_socket)
             except socket.timeout:
                 continue
@@ -196,6 +194,12 @@ def launch_gui():
     def clear_log():
         text_area.delete('1.0', tk.END)
 
+    def clear_cache():
+        global cached_urls, CACHE
+        cached_urls.clear()
+        CACHE.clear()
+        update_cache_listbox()
+
     def exit_gui():
         global is_running
         is_running = False
@@ -204,7 +208,7 @@ def launch_gui():
     global cache_listbox
 
     root = tk.Tk()
-    root.title("Proxy Server Control Panel")
+    root.title("Proxy Server")
 
     control_frame = tk.Frame(root)
     tk.Button(control_frame, text="Clear Log", command=clear_log).pack(side=tk.LEFT, padx=5)
@@ -217,8 +221,15 @@ def launch_gui():
     text_area = ScrolledText(main_frame, wrap=tk.WORD, height=20, width=80)
     text_area.pack(side=tk.LEFT, padx=10, pady=5, fill=tk.BOTH, expand=True)
 
-    cache_listbox = tk.Listbox(main_frame, height=20, width=40)
-    cache_listbox.pack(side=tk.RIGHT, padx=10, pady=5, fill=tk.Y)
+    # Right frame with label, button, and listbox
+    right_frame = tk.Frame(main_frame)
+    right_frame.pack(side=tk.RIGHT, padx=10, pady=5, fill=tk.Y)
+
+    tk.Label(right_frame, text="Cached Websites", font=('Helvetica', 12, 'bold')).pack(anchor='n', pady=(0, 5))
+    tk.Button(right_frame, text="Clear Cache", command=clear_cache).pack(anchor='n', pady=(0, 10))
+
+    cache_listbox = tk.Listbox(right_frame, height=20, width=40)
+    cache_listbox.pack(fill=tk.Y)
 
     sys.stdout = GuiLogger(text_area)
     sys.stderr = GuiLogger(text_area)
