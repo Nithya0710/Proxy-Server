@@ -15,7 +15,7 @@ All required libraries are part of the standard Python library, so no additional
 
 ## How to Run
 1. Save the script.
-2. Open Firfox, got to Settings.
+2. Open Firfox, go to Settings.
 3. Search for network settings, go to Settings...
 4. Select Manual proxy configuration:
     HTTP Proxy-> 127.0.0.1 Port->8888
