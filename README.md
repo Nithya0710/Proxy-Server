@@ -1,6 +1,6 @@
 # Proxy-Web-Server
 
-This project implements a multithreaded HTTP/HTTPS proxy server with a built-in GUI using Python and Tkinter. The proxy server supports caching, logs all events in a graphical interface, and maintains a list of cached websites.
+This project implements a multithreaded HTTP/HTTPS proxy server with a built-in GUI using Python and tkinter. The proxy server supports caching, logs all events in a graphical interface, and maintains a list of cached websites.
 
 ## Features
 1. Handles both HTTP and HTTPS traffic
